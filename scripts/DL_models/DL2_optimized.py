@@ -193,15 +193,37 @@ class BERTClassifier:
         print(f"Model saved to: {output_dir}")
 
 def main():
-    for model_name in ["distilbert-base-uncased", "bert-base-uncased", "roberta-base"]:
-        
+    model_params = {
+        "distilbert-base-uncased": {
+            "model_name": "distilbert-base-uncased",
+            "learning_rate": 2e-4,
+            "weight_decay": 0.02,
+            "dropout_rate": 0.3,
+            "batch_size": 64
+        },
+        "albert-base-v2": {
+            "model_name": "albert-base-v2",
+            "learning_rate": 5e-5,
+            "weight_decay": 0.01,
+            "dropout_rate": 0.1,
+            "batch_size": 32
+        },
+        "roberta-base": {
+            "model_name": "roberta-base",
+            "learning_rate": 2e-5,
+            "weight_decay": 0.05,
+            "dropout_rate": 0.15,
+            "batch_size": 24
+        }
+    }
+
+    for model_name in model_params.keys():
         print(f"Training model: {model_name}")
         data_dir = "data/clean/"
         output_dir = f"results/DL/optimized/{model_name}/"
         os.makedirs(output_dir, exist_ok=True)
 
-        classifier = BERTClassifier(model_name=model_name)
-        # Initialize tokenizer here, after potential forking
+        classifier = BERTClassifier(**model_params[model_name])
         classifier.initialize_tokenizer()
         train_dataset, val_dataset = classifier.load_data(
             data_dir + "train_dataset.csv",
