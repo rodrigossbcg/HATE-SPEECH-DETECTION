@@ -52,7 +52,8 @@ class BERTClassifier:
             weight_decay=0.1,
             dropout_rate=0.2,
             warmup_ratio=0.1,
-            num_epochs=5
+            num_epochs=5,
+            gradient_accumulation_steps=4
         ):
 
         # Model parameters
@@ -77,7 +78,7 @@ class BERTClassifier:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.warmup_ratio = warmup_ratio
-
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         # Metrics
         self.train_metrics = None
         self.eval_metrics = None
@@ -134,7 +135,7 @@ class BERTClassifier:
             examples['text'],
             truncation=True,
             padding='max_length',
-            max_length=512,  # You can adjust this value based on your needs
+            max_length=128,  # You can adjust this value based on your needs
             return_tensors="pt"
         )
         # Convert to regular tensors (not batched)
@@ -189,7 +190,7 @@ class BERTClassifier:
             learning_rate=self.learning_rate,
             weight_decay=self.weight_decay,
             warmup_ratio=self.warmup_ratio,
-            gradient_accumulation_steps=1,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
             eval_strategy="steps",
             eval_steps=total_steps // 10,
             logging_strategy="steps",
@@ -213,7 +214,7 @@ class BERTClassifier:
     def objective(self, trial):
 
         # Suggest values for each hyperparameter
-        self.batch_size = trial.suggest_categorical('batch_size', [16, 32, 64])
+        self.batch_size = trial.suggest_categorical('batch_size', [8, 16, 32])
         self.learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-3)
         self.weight_decay = trial.suggest_float('weight_decay', 1e-3, 1e-1)
         dropout_rate = trial.suggest_float('dropout_rate', 0.1, 0.4)
@@ -237,9 +238,9 @@ class BERTClassifier:
         best_f1 = max(metric['eval_f1'] for metric in self.eval_metrics)
         return best_f1
 
-def main(n_trials=20):
+def main(n_trials):
 
-    for model_name in ["distilbert-base-uncased", "albert-base-v2", "roberta-base"]:
+    for model_name in ["bert-base-uncased", "GroNLP/hateBERT", "albert-base-v2", "roberta-base"]: # "distilbert-base-uncased"
         print(f"Optimizing hyperparameters for model: {model_name}")
         output_dir = f"results/DL/finetune/{model_name}/"
         os.makedirs(output_dir, exist_ok=True)

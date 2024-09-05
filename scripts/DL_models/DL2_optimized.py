@@ -10,6 +10,7 @@ import random
 import torch
 import json
 import os
+from sklearn.model_selection import train_test_split
 
 # Set environment variable to avoid tokenizer parallelism warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -50,7 +51,8 @@ class BERTClassifier:
             weight_decay=0.1,
             dropout_rate=0.2,
             warmup_ratio=0.1,
-            num_epochs=10
+            num_epochs=5,
+            gradient_accumulation_steps=4
         ):
 
         # Model parameters
@@ -75,6 +77,8 @@ class BERTClassifier:
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.warmup_ratio = warmup_ratio
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+
         # Metrics
         self.train_metrics = None
         self.eval_metrics = None
@@ -95,20 +99,34 @@ class BERTClassifier:
             clean_up_tokenization_spaces=True
         )
 
-    def load_data(self, train_file_path, val_file_path):
+    def load_data(self, train_file_path):
         train_set = load_dataset('csv', data_files=train_file_path)['train']
-        val_set = load_dataset('csv', data_files=val_file_path)['train']
+        train_df = pd.DataFrame(train_set)
+        
+        train_df, val_df = train_test_split(train_df, test_size=0.1, random_state=self.seed)
+        
+        train_dataset = Dataset.from_pandas(train_df)
+        val_dataset = Dataset.from_pandas(val_df)
 
-        return self.prepare_data(train_set), self.prepare_data(val_set)
+        return self.prepare_data(train_dataset), self.prepare_data(val_dataset)
 
-    def prepare_data(self, df):
+    def prepare_data(self, dataset):
         self.initialize_tokenizer()
-        dataset = Dataset.from_pandas(df)
-        return dataset.map(self.tokenize_and_align_labels, batched=True).remove_columns(['text']).with_format('torch')
+        return dataset.map(
+            self.tokenize_and_align_labels,
+            batched=True,
+            remove_columns=['text']
+        ).with_format("torch")
 
     def tokenize_and_align_labels(self, examples):
-        tokenized_inputs = self.tokenizer(examples['text'], truncation=True, padding=True)
-        tokenized_inputs['labels'] = examples['label']
+        tokenized_inputs = self.tokenizer(
+            examples['text'],
+            truncation=True,
+            padding='max_length',
+            max_length=128,
+            return_tensors="pt"
+        )
+        tokenized_inputs['labels'] = torch.tensor(examples['label'])
         return tokenized_inputs
 
     def compute_metrics(self, pred):
@@ -150,11 +168,11 @@ class BERTClassifier:
             dataloader_num_workers=4,
             warmup_ratio=self.warmup_ratio,
             label_smoothing_factor=0.1,
-            gradient_accumulation_steps=1,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
             eval_strategy="steps",
-            eval_steps=10,#total_steps // 25,
+            eval_steps=total_steps // 25,
             logging_strategy="steps",
-            logging_steps=10, #total_steps // 25,
+            logging_steps=total_steps // 25,
             save_strategy="no",
         )
 
@@ -194,27 +212,29 @@ class BERTClassifier:
 
 def main():
     model_params = {
-        "distilbert-base-uncased": {
-            "model_name": "distilbert-base-uncased",
-            "learning_rate": 2e-4,
-            "weight_decay": 0.02,
-            "dropout_rate": 0.3,
-            "batch_size": 64
+        #"distilbert-base-uncased": {
+        #    "model_name": "distilbert-base-uncased",
+       #     "learning_rate": 2e-5,
+         #   "weight_decay": 0.01,
+         #   "dropout_rate": 0.1,
+        #    "batch_size": 8,
+        #    "gradient_accumulation_steps": 4
+        #},
+        "GroNLP/hateBERT": {
+            "model_name": "GroNLP/hateBERT",
+            "learning_rate": 6e-4,
+            "weight_decay": 8e-3,
+            "dropout_rate": 0.125,
+            "batch_size": 16,
+            "gradient_accumulation_steps": 4
         },
-        "albert-base-v2": {
-            "model_name": "albert-base-v2",
-            "learning_rate": 5e-5,
-            "weight_decay": 0.01,
-            "dropout_rate": 0.1,
-            "batch_size": 32
-        },
-        "roberta-base": {
-            "model_name": "roberta-base",
-            "learning_rate": 2e-5,
-            "weight_decay": 0.05,
-            "dropout_rate": 0.15,
-            "batch_size": 24
-        }
+        # "roberta-base": {
+        #    "model_name": "roberta-base",
+        #    "learning_rate": 2e-5,
+        #    "weight_decay": 0.05,
+        #    "dropout_rate": 0.15,
+        #    "batch_size": 24
+        #}
     }
 
     for model_name in model_params.keys():
@@ -226,8 +246,7 @@ def main():
         classifier = BERTClassifier(**model_params[model_name])
         classifier.initialize_tokenizer()
         train_dataset, val_dataset = classifier.load_data(
-            data_dir + "train_dataset.csv",
-            data_dir + "test_dataset.csv"
+            data_dir + "train_dataset.csv"
         )
         classifier.train(train_dataset, val_dataset, output_dir=output_dir)
         classifier.save_metrics(f"{output_dir}/")

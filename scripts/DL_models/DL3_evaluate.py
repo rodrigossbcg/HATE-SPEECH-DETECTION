@@ -6,11 +6,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
+import warnings
 
-# Load the study
-model = "roberta-base" # "distilbert-base-uncased", "albert-base-v2"
-study_file = "results/DL/finetune/"
-path = f"{study_file}/{model}/study.pkl"
+# Suppress warnings
+warnings.filterwarnings("ignore")
 
 def plot_accuracy_evolution(trials, model):
     """ Plot the evolution of accuracy over trials """
@@ -83,19 +82,37 @@ def plot_parameters_distribution(study, model):
         plt.savefig(f"results/DL/finetune/{model}/plots/{idx}_{param}_distribution.png")
         plt.close()
 
-try:
-    study = joblib.load(path)
-    os.makedirs(f"results/DL/finetune/{model}/plots", exist_ok=True)
-    print(f"Loaded study: {study_file}")
 
-    # Plot accuracy evolution
-    plot_accuracy_evolution(study.trials, model)
 
-    # Plot parameter importances
-    plot_parameter_importances(study, model)
+finetune_path = "results/DL/finetune"
 
-    # Plot distribution of the top X parameters
-    plot_parameters_distribution(study, model)
+for model in os.listdir(finetune_path):
 
-except FileNotFoundError:
-    print(f"Study {study_file} not found.")
+    try:
+        if model == ".DS_Store":
+            continue
+
+        if model == "GroNLP":
+            model = "GroNLP/hateBERT"
+        study = joblib.load(f"{finetune_path}/{model}/study.pkl")
+        os.makedirs(f"results/DL/finetune/{model}/plots", exist_ok=True)
+
+        # Print model name, best F1-score, and params
+        best_trial = study.best_trial
+        print(f"Model: {model}")
+        print(f"Best F1-score: {best_trial.values[0]:.4f}")
+        print(f"Best params: {best_trial.params}")
+        print("-" * 50)
+
+        # Plot accuracy evolution
+        plot_accuracy_evolution(study.trials, model)
+
+        # Plot parameter importances
+        plot_parameter_importances(study, model)
+
+        # Plot distribution of the top X parameters
+        plot_parameters_distribution(study, model)
+
+    except FileNotFoundError:
+        print(f"Study not found for model: {model}")
+        print("-" * 50)
