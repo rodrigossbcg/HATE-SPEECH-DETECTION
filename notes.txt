@@ -1,0 +1,19 @@
+Finetuning:
+
+ train: 1800
+ validation: 200
+ gradient accumulation: 4
+ max length: 64
+ logging steps: 10
+ eval steps: 10
+
+
+Optimized:
+
+train: train
+validation: 0.1 test
+test: 0.9 test
+gradient accumulation: 4
+max length: 64
+logging steps: 50
+eval steps: 50

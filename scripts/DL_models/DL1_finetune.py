@@ -11,7 +11,6 @@ import torch
 import joblib
 import os
 import optuna
-from optuna.trial import TrialState
 
 # Set environment variable to avoid tokenizer parallelism warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -135,7 +134,7 @@ class BERTClassifier:
             examples['text'],
             truncation=True,
             padding='max_length',
-            max_length=128,  # You can adjust this value based on your needs
+            max_length=64,
             return_tensors="pt"
         )
         # Convert to regular tensors (not batched)
@@ -167,7 +166,8 @@ class BERTClassifier:
         print("Sample attention mask shape:", sample_batch['attention_mask'].shape)
         print("Sample label shape:", sample_batch['labels'].shape)
 
-        total_steps = len(train_dataset) * self.num_epochs // self.batch_size
+        total_steps = len(train_dataset) * self.num_epochs // (self.batch_size * self.gradient_accumulation_steps)
+        print(f"Training {self.model_name.split('/')[-1].lower()}, total training steps: {total_steps}")
 
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -177,7 +177,7 @@ class BERTClassifier:
 
         scheduler = get_cosine_schedule_with_warmup(
             optimizer,
-            num_warmup_steps=total_steps * self.warmup_ratio,
+            num_warmup_steps=int(total_steps * self.warmup_ratio),
             num_training_steps=total_steps,
         )
 
@@ -194,7 +194,7 @@ class BERTClassifier:
             eval_strategy="steps",
             eval_steps=total_steps // 10,
             logging_strategy="steps",
-            logging_steps=total_steps // 50,
+            logging_steps=total_steps // 10,
             save_strategy="no"
         )
 
@@ -214,7 +214,7 @@ class BERTClassifier:
     def objective(self, trial):
 
         # Suggest values for each hyperparameter
-        self.batch_size = trial.suggest_categorical('batch_size', [8, 16, 32])
+        self.batch_size = trial.suggest_categorical('batch_size', [16, 32, 64])
         self.learning_rate = trial.suggest_float('learning_rate', 1e-5, 1e-3)
         self.weight_decay = trial.suggest_float('weight_decay', 1e-3, 1e-1)
         dropout_rate = trial.suggest_float('dropout_rate', 0.1, 0.4)
@@ -230,19 +230,19 @@ class BERTClassifier:
         self.model.to(self.device)
 
         train_dataset, val_dataset = self.load_data(
-            f"{self.data_dir}train_dataset.csv",
-            f"{self.data_dir}test_dataset.csv"
+            f"{self.data_dir}train_dataset_dl.csv",
+            f"{self.data_dir}test_dataset_dl.csv"
         )
         self.train(train_dataset, val_dataset)
 
-        best_f1 = max(metric['eval_f1'] for metric in self.eval_metrics)
+        best_f1 = max(metric['eval_accuracy'] for metric in self.eval_metrics)
         return best_f1
 
 def main(n_trials):
 
-    for model_name in ["bert-base-uncased", "GroNLP/hateBERT", "albert-base-v2", "roberta-base"]: # "distilbert-base-uncased"
-        print(f"Optimizing hyperparameters for model: {model_name}")
-        output_dir = f"results/DL/finetune/{model_name}/"
+    for model_name in ["GroNLP/hateBERT", "distilbert-base-uncased", "bert-base-uncased", "roberta-base"]:
+        print(f"Optimizing hyperparameters for model: {model_name.split('/')[-1].lower()}")
+        output_dir = f"results/DL/finetune/{model_name.split('/')[-1].lower()}/"
         os.makedirs(output_dir, exist_ok=True)
         classifier = BERTClassifier(model_name=model_name)
         study = optuna.create_study(direction="maximize")
@@ -250,4 +250,4 @@ def main(n_trials):
         joblib.dump(study, output_dir + "study.pkl")
 
 if __name__ == "__main__":
-    main(n_trials=25)
+    main(n_trials=50)

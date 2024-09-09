@@ -9,6 +9,7 @@ from nltk.stem import WordNetLemmatizer
 nltk.download('stopwords')
 nltk.download('punkt')
 nltk.download('wordnet')
+nltk.download('punkt_tab')
 
 
 def recursive_clean(text):
@@ -173,6 +174,14 @@ print("Drop duplicates (after tokenize):",  len(data))
 
 # Save the modified dataframe to a new CSV file
 data.to_csv('data/clean/dataset.csv', index=False)
+
+# Delete rows with more than 64 words
+data['word_count'] = data['text'].apply(lambda x: len(x.split()))
+data = data[data['word_count'] <= 64]
+data = data.drop('word_count', axis=1)
+
+# Save the dataframe for deep learning models
+data.to_csv('data/clean/dataset_dl.csv', index=False)
 
 # Print the length of the data after processing
 print(f"\nData length after processing: {len(data)}")

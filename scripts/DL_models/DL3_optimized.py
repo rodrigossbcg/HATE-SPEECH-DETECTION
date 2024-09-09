@@ -1,17 +1,18 @@
 from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification, Trainer, TrainingArguments, get_cosine_schedule_with_warmup
-from datasets import load_dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.model_selection import train_test_split
+from datasets import load_dataset
 import numpy as np
 import pandas as pd
+import torch.nn as nn
 from datasets import Dataset
 import warnings
-from transformers import logging as transformers_logging
 import random
 import joblib
 import torch
 import json
 import os
-from sklearn.model_selection import train_test_split
+
 
 # Set environment variable to avoid tokenizer parallelism warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -39,6 +40,14 @@ class CustomTrainer(Trainer):
             self.train_metrics.append(logs)
             train_log = {k: v for k, v in logs.items() if not k.startswith('eval_')}
             print(f"Train metrics: {train_log}", flush=True)
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs.logits
+        loss_fct = nn.CrossEntropyLoss()
+        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+        return (loss, outputs) if return_outputs else loss
 
 
 class BERTClassifier:
@@ -100,19 +109,23 @@ class BERTClassifier:
             clean_up_tokenization_spaces=True
         )
 
-    def load_data(self, train_file_path):
+    def load_data(self, train_file_path, val_file_path):
         train_set = load_dataset('csv', data_files=train_file_path)['train']
-        train_df = pd.DataFrame(train_set)
-        
-        train_df, val_df = train_test_split(train_df, test_size=0.1, random_state=self.seed)
-        
-        train_dataset = Dataset.from_pandas(train_df)
-        val_dataset = Dataset.from_pandas(val_df)
+        val_set = load_dataset('csv', data_files=val_file_path)['train']
 
-        return self.prepare_data(train_dataset), self.prepare_data(val_dataset)
+        train_dataset = self.prepare_data(train_set)
+        val_dataset = self.prepare_data(val_set)
 
-    def prepare_data(self, dataset):
-        self.initialize_tokenizer()
+        return train_dataset, val_dataset
+
+    def prepare_data(self, data):
+        if isinstance(data, pd.DataFrame):
+            dataset = Dataset.from_pandas(data)
+        elif isinstance(data, Dataset):
+            dataset = data
+        else:
+            raise ValueError("Input data must be either a pandas DataFrame or a Dataset object")
+        
         return dataset.map(
             self.tokenize_and_align_labels,
             batched=True,
@@ -120,13 +133,21 @@ class BERTClassifier:
         ).with_format("torch")
 
     def tokenize_and_align_labels(self, examples):
+        # Ensure 'text' is a list of strings
+        texts = examples['text']
+        if not isinstance(texts, list):
+            texts = [str(text) for text in texts]
+        
         tokenized_inputs = self.tokenizer(
-            examples['text'],
+            texts,
             truncation=True,
             padding='max_length',
-            max_length=128,
+            max_length=64,
             return_tensors="pt"
         )
+        
+        # Convert to regular tensors (not batched)
+        tokenized_inputs = {k: v.squeeze(0) for k, v in tokenized_inputs.items()}
         tokenized_inputs['labels'] = torch.tensor(examples['label'])
         return tokenized_inputs
 
@@ -143,7 +164,6 @@ class BERTClassifier:
         }
 
     def train(self, train_dataset, val_dataset, output_dir):
-
         total_steps = (len(train_dataset) * self.num_epochs) // (self.batch_size * self.gradient_accumulation_steps)
 
         optimizer = torch.optim.AdamW(
@@ -160,7 +180,8 @@ class BERTClassifier:
 
         training_args = TrainingArguments(
             output_dir=output_dir,
-            logging_dir=os.path.join(output_dir, "logs"),
+
+            # Training parameters
             per_device_train_batch_size=self.batch_size,
             per_device_eval_batch_size=self.batch_size,
             num_train_epochs=self.num_epochs,
@@ -168,13 +189,20 @@ class BERTClassifier:
             weight_decay=self.weight_decay,
             dataloader_num_workers=4,
             warmup_ratio=self.warmup_ratio,
-            label_smoothing_factor=0.1,
-            gradient_accumulation_steps=self.gradient_accumulation_steps,
+
+            # Evaluation and logging parameters
             eval_strategy="steps",
-            eval_steps=total_steps // 25,
+            eval_steps=total_steps // 50,
+            save_strategy="steps",
+            save_steps=total_steps // 50,
+            logging_dir=os.path.join(output_dir, "logs"),
             logging_strategy="steps",
-            logging_steps=total_steps // 25,
-            save_strategy="no",
+            logging_steps=total_steps // 50,
+
+            # Save best model
+            load_best_model_at_end=True,
+            metric_for_best_model="accuracy",
+            greater_is_better=True,
         )
 
         trainer = CustomTrainer(
@@ -192,7 +220,6 @@ class BERTClassifier:
         self.eval_metrics = trainer.eval_metrics
 
     def save_metrics(self, output_dir: str):
-
         os.makedirs(output_dir, exist_ok=True)
         train_file = os.path.join(output_dir, 'train_metrics.json')
         eval_file = os.path.join(output_dir, 'eval_metrics.json')
@@ -206,49 +233,43 @@ class BERTClassifier:
         print(f"Train metrics saved to: {train_file}")
         print(f"Eval metrics saved to: {eval_file}")
 
-    def save_best_model(self, output_dir):
-        self.model.save_pretrained(output_dir)
-        self.tokenizer.save_pretrained(output_dir)
-        print(f"Model saved to: {output_dir}")
+    def save_best_model(self, output_dir: str):
+        os.makedirs(output_dir, exist_ok=True)
+        best_model_path = os.path.join(output_dir, 'best_model')
+        self.model.save_pretrained(best_model_path)
+        print(f"Best model saved to: {best_model_path}")
 
 
 def main():
-
-    finetune_path = "results/DL/finetune"
     model_params = {}
 
-    for model_name in os.listdir(finetune_path):
-        if model_name == ".DS_Store" or model_name == "albert-base-v2" or model_name == "distilbert-base-uncased":
-            continue
+    for model_name in ["GroNLP/hateBERT", "distilbert-base-uncased", "bert-base-uncased", "roberta-base"]:
+        study_path = os.path.join(f"results/DL/finetune/{model_name.split('/')[-1].lower()}/study.pkl")
+        study = joblib.load(study_path)
+        best_trial = study.best_trial
 
-        study_path = os.path.join(finetune_path, model_name, "study.pkl")
-        if os.path.exists(study_path):
-            study = joblib.load(study_path)
-            best_trial = study.best_trial
-
-            model_params[model_name] = {
-                "model_name": model_name,
-                "learning_rate": best_trial.params['learning_rate'],
-                "weight_decay": best_trial.params['weight_decay'],
-                "dropout_rate": best_trial.params['dropout_rate'],
-                "batch_size": best_trial.params['batch_size'],
-                "gradient_accumulation_steps": 4 if model_name != "distilbert-base-uncased" else 1
-            }
-
-    for model_name in model_params.keys():
+        model_params[model_name] = {
+            "model_name": model_name,
+            "learning_rate": best_trial.params['learning_rate'],
+            "weight_decay": best_trial.params['weight_decay'],
+            "dropout_rate": best_trial.params['dropout_rate'],
+            "batch_size": best_trial.params['batch_size'],
+            "gradient_accumulation_steps": 4
+        }
+    
         print(f"Training model: {model_name}")
         data_dir = "data/clean/"
-        output_dir = f"results/DL/optimized/{model_name}/"
+        output_dir = f"results/DL/optimized/{model_name.split('/')[-1].lower()}/"
         os.makedirs(output_dir, exist_ok=True)
 
         classifier = BERTClassifier(**model_params[model_name])
         classifier.initialize_tokenizer()
-        train_dataset, val_dataset = classifier.load_data(
-            data_dir + "train_dataset.csv"
+        train_dataset, val_dataset, test_dataset = classifier.load_data(
+            data_dir + "train_dataset_dl.csv",
+            data_dir + "test_dataset_dl.csv"
         )
         classifier.train(train_dataset, val_dataset, output_dir=output_dir)
         classifier.save_metrics(f"{output_dir}/")
-        classifier.save_best_model(f"{output_dir}/best_model")
 
 if __name__ == "__main__":
     main()

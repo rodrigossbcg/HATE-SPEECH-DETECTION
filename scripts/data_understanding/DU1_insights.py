@@ -7,11 +7,30 @@ data = pd.read_csv('data/clean/dataset.csv')
 data['text'] = data['text'].astype(str)
 print("Number of sentences: ", len(data))
 
-# Average number of words per sentence
-data['num_words'] = data['text'].apply(lambda x: len(x.split()))
-print(f"Average number of words per sentence: {data['num_words'].mean()}")
+# Calculate sentence length percentiles by number of words
+sentence_lengths = data['text'].apply(lambda x: len(x.split()))
+percentiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+length_percentiles = sentence_lengths.quantile(percentiles)
 
-# Absolute lass distribution
+print("Sentence length percentiles (in words):")
+for p, length in zip(percentiles, length_percentiles):
+    print(f"{p*100:.0f}th percentile: {length:.0f}")
+
+# Minimum and maximum sentence length in words
+print(f"Minimum sentence length: {sentence_lengths.min()} words")
+print(f"Maximum sentence length: {sentence_lengths.max()} words")
+
+# Average number of words per sentence
+print(f"Average number of words per sentence: {sentence_lengths.mean():.2f}")
+
+# Calculate probability of sentence length > 128 and > 64 words
+prob_greater_128 = (sentence_lengths > 128).mean()
+prob_greater_64 = (sentence_lengths > 64).mean()
+
+print(f"Probability of sentence length > 128 words: {prob_greater_128:.4f}")
+print(f"Probability of sentence length > 64 words: {prob_greater_64:.4f}")
+
+# Absolute class distribution
 print("Absolute distribution: ")
 print(data['label'].value_counts())
 

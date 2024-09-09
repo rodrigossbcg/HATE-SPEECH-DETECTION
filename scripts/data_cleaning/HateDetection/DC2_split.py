@@ -1,8 +1,9 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
+suffix = "_dl"
 # Load and preprocess the data
-data = pd.read_csv("data/clean/dataset.csv")
+data = pd.read_csv(f"data/clean/dataset{suffix}.csv")
 print(set(data["label"]))
 data["label"] = data["label"].astype(int)
 print(len(data))
@@ -32,11 +33,11 @@ train_data = pd.concat([X_train, y_train], axis=1)
 test_data = pd.concat([X_test, y_test], axis=1)
 
 # Save the training and testing sets to CSV files
-train_data.to_csv("data/clean/train_dataset.csv", index=False)
-test_data.to_csv("data/clean/test_dataset.csv", index=False)
+train_data.to_csv(f"data/clean/train_dataset{suffix}.csv", index=False)
+test_data.to_csv(f"data/clean/test_dataset{suffix}.csv", index=False)
 
 # Save the corpus to a text file
-corpus_path = 'data/clean/corpus.txt'
+corpus_path = f'data/clean/corpus{suffix}.txt'
 with open(corpus_path, 'w') as file:
     for line in X_train['text']:
         file.write(f"{line}\n")
