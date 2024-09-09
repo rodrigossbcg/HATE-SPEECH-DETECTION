@@ -7,6 +7,7 @@ from datasets import Dataset
 import warnings
 from transformers import logging as transformers_logging
 import random
+import joblib
 import torch
 import json
 import os
@@ -143,7 +144,7 @@ class BERTClassifier:
 
     def train(self, train_dataset, val_dataset, output_dir):
 
-        total_steps = len(train_dataset) * self.num_epochs // self.batch_size
+        total_steps = (len(train_dataset) * self.num_epochs) // (self.batch_size * self.gradient_accumulation_steps)
 
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -210,32 +211,29 @@ class BERTClassifier:
         self.tokenizer.save_pretrained(output_dir)
         print(f"Model saved to: {output_dir}")
 
+
 def main():
-    model_params = {
-        #"distilbert-base-uncased": {
-        #    "model_name": "distilbert-base-uncased",
-       #     "learning_rate": 2e-5,
-         #   "weight_decay": 0.01,
-         #   "dropout_rate": 0.1,
-        #    "batch_size": 8,
-        #    "gradient_accumulation_steps": 4
-        #},
-        "GroNLP/hateBERT": {
-            "model_name": "GroNLP/hateBERT",
-            "learning_rate": 6e-4,
-            "weight_decay": 8e-3,
-            "dropout_rate": 0.125,
-            "batch_size": 16,
-            "gradient_accumulation_steps": 4
-        },
-        # "roberta-base": {
-        #    "model_name": "roberta-base",
-        #    "learning_rate": 2e-5,
-        #    "weight_decay": 0.05,
-        #    "dropout_rate": 0.15,
-        #    "batch_size": 24
-        #}
-    }
+
+    finetune_path = "results/DL/finetune"
+    model_params = {}
+
+    for model_name in os.listdir(finetune_path):
+        if model_name == ".DS_Store" or model_name == "albert-base-v2" or model_name == "distilbert-base-uncased":
+            continue
+
+        study_path = os.path.join(finetune_path, model_name, "study.pkl")
+        if os.path.exists(study_path):
+            study = joblib.load(study_path)
+            best_trial = study.best_trial
+
+            model_params[model_name] = {
+                "model_name": model_name,
+                "learning_rate": best_trial.params['learning_rate'],
+                "weight_decay": best_trial.params['weight_decay'],
+                "dropout_rate": best_trial.params['dropout_rate'],
+                "batch_size": best_trial.params['batch_size'],
+                "gradient_accumulation_steps": 4 if model_name != "distilbert-base-uncased" else 1
+            }
 
     for model_name in model_params.keys():
         print(f"Training model: {model_name}")
