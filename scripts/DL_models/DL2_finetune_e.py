@@ -100,7 +100,7 @@ for model in os.listdir(finetune_path):
         # Print model name, best F1-score, and params
         best_trial = study.best_trial
         print(f"Model: {model}")
-        print(f"Best F1-score: {best_trial.values[0]:.4f}")
+        print(f"Best Accuracy: {best_trial.values[0]:.4f}")
         print(f"Best params: {best_trial.params}")
         print("-" * 50)
 
