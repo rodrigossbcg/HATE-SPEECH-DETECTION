@@ -1,8 +1,10 @@
 import json
+import pandas as pd
+import argparse
 from sklearn.model_selection import train_test_split
 from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification, Trainer, TrainingArguments, get_cosine_schedule_with_warmup
 from datasets import load_dataset
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
 import numpy as np
 from datasets import Dataset
 import warnings
@@ -157,11 +159,13 @@ class BERTClassifier:
         preds = pred.predictions.argmax(-1)
         precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='weighted')
         acc = accuracy_score(labels, preds)
+        roc = roc_auc_score(labels, preds, average='weighted', multi_class='ovr')
         return {
             'accuracy': acc,
             'f1': f1,
             'precision': precision,
-            'recall': recall
+            'recall': recall,
+            'roc_auc': roc
         }
 
     def train(self, train_dataset, val_dataset):
@@ -225,29 +229,30 @@ class BERTClassifier:
             json.dump(self.eval_metrics, f, indent=2)
 
     def evaluate(self, test_dataset):
+        # Load the best model
+        self.model = AutoModelForSequenceClassification.from_pretrained(self.output_dir + "/checkpoint")
+        self.model.to(self.device)
+
         # Get predictions
-        predictions = self.model(test_dataset)
-        preds = predictions.predictions.argmax(-1)
-        labels = predictions.label_ids
+        trainer = CustomTrainer(
+            model=self.model,
+            args=TrainingArguments(output_dir=self.output_dir),
+            compute_metrics=self.compute_metrics
+        )
+        predictions = trainer.predict(test_dataset)
+        metrics = self.compute_metrics(predictions)
 
-        # Calculate metrics
-        acc = accuracy_score(labels, preds)
-        precision, recall, f1, _ = precision_recall_fscore_support(labels, preds, average='weighted')
-
-        # Save results
-        results = {
-            'accuracy': acc,
-            'precision': precision,
-            'recall': recall,
-            'f1_score': f1,
-        }
-        with open(f"{self.output_dir}/test_metrics.json", 'w') as f:
-            json.dump(results, f, indent=2)
+        # Save results to CSV
+        results_df = pd.DataFrame([metrics])
+        results_df.to_csv(f"{self.output_dir}/test_metrics.csv", index=False)
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', type=str, choices=['train', 'evaluate'], required=True, help="Mode: train or evaluate")
+    args = parser.parse_args()
 
-    model_names = ["bert-base-uncased"] #,"distilbert-base-uncased", "roberta-base", "GroNLP/hateBERT"]
+    model_names = ["bert-base-uncased", "distilbert-base-uncased", "roberta-base", "GroNLP/hateBERT"]
 
     best_params = {
         "distilbert-base-uncased": {
@@ -278,7 +283,7 @@ def main():
 
     for model_name in model_names:
         folder_name = model_name.split('/')[-1].lower()
-        print(f"Training model: {folder_name}")
+        print(f"Processing model: {folder_name}")
         output_dir = f"results/DL/optimized/{folder_name}/"
         os.makedirs(output_dir, exist_ok=True)
 
@@ -287,16 +292,22 @@ def main():
             output_dir=output_dir,
             **best_params[model_name])
 
-        train_dataset, val_dataset, test_dataset = classifier.load_data(
-            "data/clean/train_dataset_dl.csv",
-            "data/clean/test_dataset_dl.csv"
-        )
-        
-        # Train the model
-        classifier.train(train_dataset, val_dataset)
+        if args.mode == 'train':
+            train_dataset, val_dataset, test_dataset = classifier.load_data(
+                "data/clean/train_dataset_dl.csv",
+                "data/clean/test_dataset_dl.csv"
+            )
+            # Train the model
+            classifier.train(train_dataset, val_dataset)
 
-        # Evaluate the model
-        # classifier.evaluate(test_dataset)
+        elif args.mode == 'evaluate':
+            # Load the test dataset
+            _, _, test_dataset = classifier.load_data(
+                "data/clean/train_dataset_dl.csv",
+                "data/clean/test_dataset_dl.csv"
+            )
+            # Evaluate the model
+            classifier.evaluate(test_dataset)
 
 if __name__ == "__main__":
     main()
